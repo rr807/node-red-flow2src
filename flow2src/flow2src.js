@@ -5,6 +5,9 @@ module.exports = function(RED) {
         node.on('input', function (msg) {
             if (!msg.hasOwnProperty('srcFolder')) return;
             if (msg.srcFolder.trim() == '') msg.srcFolder = 'src';
+            if (!msg.hasOwnProperty('subflowFolder') || msg.subflowFolder.trim() == '') {
+                msg.subflowFolder = msg.srcFolder;
+            }
 
             // String manipulation functions
             (function () {
@@ -70,7 +73,9 @@ module.exports = function(RED) {
 
             // Read and parse the flow file
             let ff = JSON.parse(fs.readFileSync(flowFile).toString());
-            let path = flowFile.delRightMost('/') + '/' + msg.srcFolder;
+            let basePath = flowFile.delRightMost('/');
+            let flowPath = basePath + '/' + msg.srcFolder;
+            let subflowPath = basePath + '/' + msg.subflowFolder;
 
             // Write the relevant flow properties to the src folder
             if (msg.action == 'flow2src') {
@@ -92,8 +97,7 @@ module.exports = function(RED) {
 
                     // Gather flow ids, folder safe names, and nodes for analysis in a single pass
                     let theNodes = [];
-                    let theFolders = [];
-                    let theIDs = [];
+                    let idMap = {};
                     ff.forEach(function (obj) {
 
                         // Check for matching flows
@@ -103,8 +107,7 @@ module.exports = function(RED) {
                                     return;
                                 }
                             }
-                            theFolders.push(obj.label.replace(/[^a-z0-9]/gi, '_'));
-                            theIDs.push(obj.id);
+                            idMap[obj.id] = { folder: obj.label.replace(/[^a-z0-9]/gi, '_'), subflow: false };
                         }
 
                         // Check for matching subflows
@@ -114,8 +117,7 @@ module.exports = function(RED) {
                                     return;
                                 }
                             }
-                            theFolders.push(obj.name.replace(/[^a-z0-9]/gi, '_'));
-                            theIDs.push(obj.id);
+                            idMap[obj.id] = { folder: obj.name.replace(/[^a-z0-9]/gi, '_'), subflow: true };
                         }
                         // Gather nodes and templates
                         if (obj.type == 'template' || obj.type == 'function' || obj.type == 'wp function') {
@@ -127,8 +129,9 @@ module.exports = function(RED) {
                     let existingFiles = [];
                     let srcNodes = [];
                     theNodes.forEach(function (obj) {
-                        if (theIDs.indexOf(obj.z) == -1) return;
-                        
+                        if (!idMap.hasOwnProperty(obj.z)) return;
+                        let info = idMap[obj.z];
+
                         // Determine the filename extension
                         let ext = '';
                         if (obj.type == 'template') {
@@ -159,12 +162,13 @@ module.exports = function(RED) {
                             ext = '.' + fname.getRightMost('.');
                             fname = fname.delRightMost('.');
                         }
-                        let file = path + '/' + theFolders[theIDs.indexOf(obj.z)] + '/' + fname + ext;
+                        let base = info.subflow ? subflowPath : flowPath;
+                        let file = base + '/' + info.folder + '/' + fname + ext;
                         let i = 2;
 
                         // Iterate existing filenames
                         while (existingFiles.indexOf(file) != -1) {
-                            file = path + '/' + theFolders[theIDs.indexOf(obj.z)] + '/' + fname + i.toString() + ext;
+                            file = base + '/' + info.folder + '/' + fname + i.toString() + ext;
                             i++;
                         }
                         obj.srcFiles = [];
@@ -172,14 +176,16 @@ module.exports = function(RED) {
                             obj.srcFiles.push({
                                 id: obj.id,
                                 property: 'template',
-                                file: file
+                                file: file,
+                                subflow: info.subflow
                             });
                             existingFiles.push(file);
                         } else if (obj.type == 'function') {
                             obj.srcFiles.push({
                                 id: obj.id,
                                 property: 'func',
-                                file: file
+                                file: file,
+                                subflow: info.subflow
                             });
                             existingFiles.push(file);
 
@@ -190,7 +196,8 @@ module.exports = function(RED) {
                             obj.srcFiles.push({
                                 id: obj.id,
                                 property: 'initialize',
-                                file: onStartFile
+                                file: onStartFile,
+                                subflow: info.subflow
                             });
                             let onStopFile = file;
                             ext = onStopFile.getRightMost('.');
@@ -198,21 +205,30 @@ module.exports = function(RED) {
                             obj.srcFiles.push({
                                 id: obj.id,
                                 property: 'finalize',
-                                file: onStopFile
+                                file: onStopFile,
+                                subflow: info.subflow
                             });
                         } else if (obj.type == 'wp function') {
                             obj.srcFiles.push({
                                 id: obj.id,
                                 property: 'func',
-                                file: file
+                                file: file,
+                                subflow: info.subflow
                             });
                             existingFiles.push(file);
                         }
                         srcNodes.push(obj);
                     });
 
-                    // Remove prior src folder
-                    fs.rmSync(path, { recursive: true, force: true });
+                    // Remove prior src folders
+                    fs.rmSync(flowPath, { recursive: true, force: true });
+                    if (subflowPath !== flowPath) {
+                        fs.rmSync(subflowPath, { recursive: true, force: true });
+                    }
+                    fs.mkdirSync(flowPath, { recursive: true, mode: 0o777 });
+                    if (subflowPath !== flowPath) {
+                        fs.mkdirSync(subflowPath, { recursive: true, mode: 0o777 });
+                    }
 
                     // Write the nodes to the src folder and record the manifest
                     let manifest = [];
@@ -222,21 +238,22 @@ module.exports = function(RED) {
                             // Create the src path
                             let sFPath = sF.file.delRightMost('/');
                             if (!fs.existsSync(sFPath)) {
-                                fs.mkdirSync(sFPath, { recursive: true });
+                                fs.mkdirSync(sFPath, { recursive: true, mode: 0o777 });
                             }
 
                             // Write the given file
                             if (obj[sF.property] != '') {
-                                fs.writeFileSync(sF.file, obj[sF.property]);
-                                sF.file = sF.file.delLeftMost(path + '/');
+                                fs.writeFileSync(sF.file, obj[sF.property], { mode: 0o666 });
+                                let base = sF.subflow ? subflowPath : flowPath;
+                                sF.file = sF.file.delLeftMost(base + '/');
                                 manifest.push(sF);
                             }
                         });
                     });
 
                     // Write the manifest to the src folder
-                    fs.mkdirSync(path, { recursive: true });
-                    fs.writeFileSync(path + '/manifest.json', JSON.stringify(manifest, null, 4));
+                    fs.mkdirSync(flowPath, { recursive: true, mode: 0o777 });
+                    fs.writeFileSync(flowPath + '/manifest.json', JSON.stringify(manifest, null, 4), { mode: 0o666 });
                     node.status({ fill: "green", shape: "dot", text: "updated files" });
                     setTimeout(function() {
                         node.status({});
@@ -251,21 +268,22 @@ module.exports = function(RED) {
                 try {
 
                     // Load the manifest
-                    if (!fs.existsSync(path + '/manifest.json')) return;
-                    let mn = JSON.parse(fs.readFileSync(path + '/manifest.json').toString());
+                    if (!fs.existsSync(flowPath + '/manifest.json')) return;
+                    let mn = JSON.parse(fs.readFileSync(flowPath + '/manifest.json').toString());
 
                     ff.forEach(function (obj) {
                         mn.forEach(function(item) {
                             if (item.id != obj.id) return;
                             
                             // Update the content from the external file
-                            let file = fs.readFileSync(path + '/' + item.file).toString();
+                            let base = item.subflow ? subflowPath : flowPath;
+                            let file = fs.readFileSync(base + '/' + item.file).toString();
                             obj[item.property] = file;
                         });
                     });
 
                     // Update the flow file
-                    fs.writeFileSync(flowFile, JSON.stringify(ff, null, 4));
+                    fs.writeFileSync(flowFile, JSON.stringify(ff, null, 4), { mode: 0o666 });
                 } catch(e) {
                     node.error(e);
                 }
@@ -274,7 +292,7 @@ module.exports = function(RED) {
 
         // Automatic flow2src on deploys
         if (config.chkAutoFlow2Src) {
-            node.receive({action:"flow2src", srcFolder: config.srcFolder});
+            node.receive({action:"flow2src", srcFolder: config.srcFolder, subflowFolder: config.subflowFolder});
         }
     }
     RED.httpAdmin.post("/flow2src/:id", RED.auth.needsPermission("inject.write"), function (req, res) {

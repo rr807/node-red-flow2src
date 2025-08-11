@@ -147,7 +147,21 @@
             <div class="col-100">
                 <label for="node-input-srcFolder">Output Folder</label>
                 <input type="text" id="node-input-srcFolder" placeholder="src">
-                
+
+            </div><!--col-->
+        </div><!--form-row-->
+        <div class="form-row">
+            <div class="col-100 reg-lbl">
+                <label class="full-lbl">
+                    <span>The subflow output folder relative to the flow file (defaults to Output Folder):</span>
+                </label>
+            </div><!--col-->
+        </div><!--form-row-->
+        <div class="form-row">
+            <div class="col-100">
+                <label for="node-input-subflowFolder">Subflow Folder</label>
+                <input type="text" id="node-input-subflowFolder" placeholder="src">
+
             </div><!--col-->
         </div><!--form-row-->
         <div class="form-row">
@@ -204,6 +218,7 @@ options:
 subflows.
 * Output Folder - By default the folder is named 'src'; you can specify a different path relative to your project's flow
 file.
+* Subflow Folder - Specify a different path for subflows; defaults to Output Folder when left blank.
 
 Lastly, you can invoke the "Flow-to-Src" button automatically using the checkbox for "Automatiaclly Flow-to-Src on
 Deploys".
@@ -218,6 +233,7 @@ Deploys".
                         incFlows: {value:"*"},
             incSubflows: {value:"*"},
             srcFolder: {value:"src"},
+            subflowFolder: {value:""},
             chkAutoFlow2Src: {value:false}
         },
         inputs: 0,
@@ -237,7 +253,7 @@ Deploys".
             }, 30);
             var node = this;
             $('#btn_flow2src').click(function(){
-                doAjax({"action":'flow2src', "srcFolder": node.srcFolder}, node.id, function(res){
+                doAjax({"action":'flow2src', "srcFolder": node.srcFolder, "subflowFolder": node.subflowFolder}, node.id, function(res){
                     $('#node-dialog-ok').click();
                     let notice = RED.notify('Flow source properties written to "./' + node.srcFolder + '" folder.', {
                         type: "success",
@@ -246,7 +262,7 @@ Deploys".
                 });
             });
             $('#btn_src2flow').click(function(){
-                doAjax({"action":'src2flow', "srcFolder": node.srcFolder}, node.id, function(res) {
+                doAjax({"action":'src2flow', "srcFolder": node.srcFolder, "subflowFolder": node.subflowFolder}, node.id, function(res) {
                     reloadFlows(function() {
                         $('#node-dialog-ok').click();
                     });
